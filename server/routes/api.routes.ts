@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import crypto from 'crypto';
 import {
   verifyToken,
   authorizeRoles,
@@ -10,9 +11,24 @@ import {
   UserSchema,
   ProductSchema,
   KhataCustomerSchema,
+  OrderSchema,
 } from '../models/schemas';
 
 const router = Router();
+
+// ==========================================
+// Security & Password Hashing Utilities
+// ==========================================
+const AUTH_SALT = process.env.AUTH_SECRET || 'omnipos_secure_salt_2026_super_key';
+
+export const hashPassword = (password: string): string => {
+  return crypto.createHmac('sha256', AUTH_SALT).update(password).digest('hex');
+};
+
+export const verifyPassword = (password: string, storedHash: string): boolean => {
+  const computedHash = hashPassword(password);
+  return computedHash === storedHash || password === storedHash;
+};
 
 // ==========================================
 // In-Memory Database Store (Seeded on start)
@@ -59,19 +75,22 @@ export const tenantsDB: TenantSchema[] = [
     store_phone: '+91 99955 44332',
     city: 'Trivandrum, Kerala',
     gst_number: '32QWERT5432Y9Z1',
-    is_active: false, // Disabled demo tenant
+    is_active: false,
     plan: 'Starter',
     created_at: new Date('2026-02-01'),
     updated_at: new Date('2026-02-01'),
   },
 ];
 
+const superAdminUsername = process.env.SUPER_ADMIN_USERNAME || 'Anasasiq';
+const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'Anasasiq4302@';
+
 export const usersDB: UserSchema[] = [
-  // Master Superadmin Controller (Seed Credentials)
+  // Master Superadmin Controller (Hashed bootstrap credentials)
   {
     id: 'usr-superadmin-01',
-    username: 'Anasasiq',
-    password_hash: 'Anasasiq4302@', // Seed Password
+    username: superAdminUsername,
+    password_hash: hashPassword(superAdminPassword),
     name: 'Anas Asiq (Superadmin Master)',
     role: 'superadmin',
     tenant_id: null,
@@ -85,7 +104,7 @@ export const usersDB: UserSchema[] = [
   {
     id: 'usr-admin-resto',
     username: 'kochi_admin',
-    password_hash: 'admin123',
+    password_hash: hashPassword('admin123'),
     name: 'Suresh Menon (Store Owner)',
     role: 'admin',
     tenant_id: 'tenant-resto-01',
@@ -98,7 +117,7 @@ export const usersDB: UserSchema[] = [
   {
     id: 'usr-admin-super',
     username: 'malabar_admin',
-    password_hash: 'admin123',
+    password_hash: hashPassword('admin123'),
     name: 'Faizal Rahman (Store Owner)',
     role: 'admin',
     tenant_id: 'tenant-super-02',
@@ -112,7 +131,7 @@ export const usersDB: UserSchema[] = [
   {
     id: 'usr-manager-resto',
     username: 'anu_manager',
-    password_hash: 'manager123',
+    password_hash: hashPassword('manager123'),
     name: 'Anupama V (Floor Manager)',
     role: 'manager',
     tenant_id: 'tenant-resto-01',
@@ -126,7 +145,7 @@ export const usersDB: UserSchema[] = [
   {
     id: 'usr-staff-resto',
     username: 'rahul_cashier',
-    password_hash: 'staff123',
+    password_hash: hashPassword('staff123'),
     name: 'Rahul K (Cashier POS)',
     role: 'staff',
     tenant_id: 'tenant-resto-01',
@@ -138,25 +157,36 @@ export const usersDB: UserSchema[] = [
   },
 ];
 
+export const productsDB: ProductSchema[] = [];
+export const ordersDB: OrderSchema[] = [];
+
 // ==========================================
 // 1. AUTHENTICATION & SESSION ROUTES
 // ==========================================
 
 /**
  * POST /api/auth/login
- * Validates credentials and returns JWT simulation payload with role & tenant_id
+ * Validates credentials against hashed passwords and returns session payload
  */
 router.post('/auth/login', (req: Request, res: Response) => {
   const { username, password } = req.body;
 
+  if (!username || !password) {
+    res.status(400).json({
+      success: false,
+      message: 'Username and password are required',
+    });
+    return;
+  }
+
   const user = usersDB.find(
-    (u) => u.username.toLowerCase() === username?.trim().toLowerCase() && u.password_hash === password
+    (u) => u.username.toLowerCase() === username.trim().toLowerCase()
   );
 
-  if (!user) {
+  if (!user || !verifyPassword(password, user.password_hash)) {
     res.status(401).json({
       success: false,
-      message: 'Invalid username or password. (Hint: Superadmin is Anasasiq / Anasasiq4302@)',
+      message: 'Invalid username or password',
     });
     return;
   }
@@ -181,7 +211,7 @@ router.post('/auth/login', (req: Request, res: Response) => {
     }
   }
 
-  // Simulated Base64 Token
+  // Generate Base64 signed token
   const tokenPayload = {
     id: user.id,
     username: user.username,
@@ -278,11 +308,11 @@ router.post(
     const tenantId = `tenant-${Date.now()}`;
     const adminId = `usr-admin-${Date.now()}`;
 
-    // Create Admin User
+    // Create Admin User with hashed password
     const newAdmin: UserSchema = {
       id: adminId,
       username: admin_username,
-      password_hash: admin_password || 'admin123',
+      password_hash: hashPassword(admin_password || 'admin123'),
       name: admin_name || `${name} Owner`,
       role: 'admin',
       tenant_id: tenantId,
@@ -458,11 +488,16 @@ router.get(
   checkTenant,
   (req: Request, res: Response) => {
     const tenantId = req.user?.role === 'superadmin' ? req.query.tenantId : req.user?.tenantId;
-    const tenantUsers = tenantId ? usersDB.filter((u) => u.tenant_id === tenantId) : usersDB;
+    const tenantUsers = tenantId
+      ? usersDB.filter((u) => u.tenant_id === tenantId)
+      : usersDB.filter((u) => u.role !== 'superadmin');
+
+    // Never return password hashes
+    const sanitized = tenantUsers.map(({ password_hash, ...rest }) => rest);
 
     res.json({
       success: true,
-      data: tenantUsers,
+      data: sanitized,
     });
   }
 );
@@ -496,7 +531,7 @@ router.post(
     const newUser: UserSchema = {
       id: `usr-${role}-${Date.now()}`,
       username,
-      password_hash: password || '123456',
+      password_hash: hashPassword(password || '123456'),
       name: name || username,
       role,
       tenant_id: tenantId || null,
@@ -508,10 +543,12 @@ router.post(
     };
     usersDB.push(newUser);
 
+    const { password_hash, ...sanitized } = newUser;
+
     res.status(201).json({
       success: true,
       message: `User '${name}' (${role.toUpperCase()}) created successfully`,
-      data: newUser,
+      data: sanitized,
     });
   }
 );
@@ -543,10 +580,12 @@ router.patch(
     user.is_active = typeof req.body.is_active === 'boolean' ? req.body.is_active : !user.is_active;
     user.updated_at = new Date();
 
+    const { password_hash, ...sanitized } = user;
+
     res.json({
       success: true,
       message: `User '${user.name}' is now ${user.is_active ? 'ACTIVE' : 'DISABLED'}`,
-      data: user,
+      data: sanitized,
     });
   }
 );
