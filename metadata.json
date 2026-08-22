@@ -1,0 +1,10 @@
+{
+  "name": "OmniPOS - Retail Store POS \u0026 Inventory System 0.0.2",
+  "description": "Enterprise Restaurant App SaaS & Food POS featuring 3-step bill printing (KOT, Pre-bill, Receipt), 11+ payment gateways, Waiter & Chef KDS apps, Table reservation floor plans, Doorstep delivery dispatch, Catering quotations with 1-click convert to sale, Due list with WhatsApp reminders, Coupons engine, and Multi-tenant SaaS.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
